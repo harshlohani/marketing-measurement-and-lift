@@ -59,6 +59,13 @@ estimate in the chat archive.
   ATE estimate.
   Task: compute conversion rate for treatment vs. control, take the
   difference. This is your first Average Treatment Effect.
+  **Robustness check (don't skip):** compute this ATE twice — once on the
+  full dataset, once with exact duplicates dropped (`drop_duplicates()`) —
+  and compare. This resolves the open duplicates/proxy-ID question logged in
+  `concepts_and_resources.md` with actual evidence instead of leaving it as
+  a hypothesis. If the two versions agree, note it and move on; if they
+  disagree meaningfully, that's a dedicated follow-up (cluster-robust
+  standard errors).
 
 - [ ] **Session 7 — Is it statistically significant?**
   Concept: hypothesis testing — why a small percentage-point difference could
