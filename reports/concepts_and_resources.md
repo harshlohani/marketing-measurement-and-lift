@@ -7,6 +7,114 @@ and where to read more.
 
 ---
 
+## Core Learning Resources
+
+Referenced throughout the entries below — listed once here instead of
+repeated per-entry.
+
+**Foundational (causal inference basics):**
+- **Brady Neal — *Introduction to Causal Inference*** (free book + video
+  course). Strong ML-oriented foundation; covers balance, confounding,
+  potential outcomes rigorously but accessibly.
+- **Matheus Facure — *Causal Inference for the Brave and True*** (free,
+  Python-code-based). Good fit for this project specifically since it pairs
+  concepts directly with runnable Python — matches a hands-on learning style.
+- **Scott Cunningham — *Causal Inference: The Mixtape*** (free online book).
+  More econometrics-flavored, good for building intuition with real examples.
+
+**Applied / production (useful once you reach Phase 5+):**
+- **DoWhy** and **EconML** (Microsoft) and **CausalML** (Uber) — production
+  causal ML libraries, useful to browse for how causal inference is actually
+  deployed in industry systems.
+
+---
+
+## Causal Modeling vs. Predictive Modeling
+
+### What it means
+
+Predictive modeling answers: *"given X, what is Y?"* — a question about
+**observation**. It estimates `P(Y | X)`.
+
+Causal modeling answers: *"given I **change** X, what happens to Y?"* — a
+question about **intervention**. In Pearl's notation, it estimates
+`P(Y | do(X))`.
+
+These are not the same quantity, and treating them as interchangeable is the
+most common mistake in applied ML.
+
+### Why they diverge — the classic failure mode
+
+Ice cream sales correlate with drowning deaths. A predictive model exploits
+that correlation perfectly for prediction — and would be completely wrong if
+acted on causally (banning ice cream does nothing to drownings). Both are
+driven by a hidden common cause: hot weather. The correlation is real; the
+causal story it implies is not. This is **confounding**.
+
+### How it shows up in this exact project
+
+Phase 3's baseline model (`conversion ~ f0...f11`, ignoring `treatment`) ranks
+customers by their **baseline propensity to buy** — whatever features
+correlate with "already intends to purchase." This is exactly Customer A from
+the README: 90% baseline conversion, looks great to a predictive model, but
+only +2% uplift from the ad. The predictive model isn't wrong at its own task
+— it's answering a different question than "who should we advertise to?"
+
+### Four concrete contrasts
+
+| | Predictive | Causal / Uplift |
+|---|---|---|
+| Target | `P(Y\|X)` | `E[Y\|do(T=1)] − E[Y\|do(T=0)]` |
+| Ground truth per row? | Yes — you observe `Y` | **No, never** — you can't observe the same customer both with and without treatment (the "fundamental problem of causal inference") |
+| Good feature engineering | Any feature correlated with Y helps | Must distinguish **confounders** (common cause of T and Y — adjust for these) from **mediators** (T → feature → Y, lies on the causal path) and **colliders** (T and Y both cause the feature) — adjusting for mediators/colliders *introduces* bias rather than removing it |
+| What fixes a wrong answer | More data, better features | Only a valid design (randomization) or a credible identification assumption — no amount of extra observational data fixes an unmeasured confounder |
+
+The "no ground truth per row" row is the one with the most downstream
+consequences: it's exactly why Phase 5 needs Qini/AUUC instead of
+accuracy/AUC — you're evaluating against an aggregate pattern across many
+customers, never a per-row label, because that label fundamentally cannot
+exist for any single customer.
+
+*(Resources: see Core Learning Resources above — this distinction is Chapter 1
+material in all three foundational texts.)*
+
+---
+
+## Why Causal Inference Matters — and Whether AI Changes That
+
+### What it means
+
+Prediction answers "what is Y given X, as the world already is." Almost every
+real decision is instead a causal question: "what happens to Y if we *change*
+X?" The gap between those two questions is where costly mistakes live.
+
+### Why AI doesn't make this obsolete — it sharpens it
+
+1. **LLMs/foundation models are trained on correlational, observational data**
+   (next-token prediction = `P(text | context)`, no `do()` anywhere). They can
+   produce fluent causal-*sounding* language because they've seen humans write
+   causal sentences — that's different from performing valid causal inference.
+   Sounding causal ≠ being causally valid, and fluency makes the gap harder to
+   notice.
+2. **Automated decision systems create feedback loops.** A recommender/targeting
+   system that only ever acts on its own past decisions contaminates its own
+   training data — structurally the same problem Criteo's randomized design
+   was built to solve. This is why ad tech specifically was an early adopter of
+   causal inference, not an academic curiosity.
+3. **Scale multiplies the cost of the mistake.** One bad human call wastes one
+   decision; the same statistical error running inside an automated system
+   making millions of decisions/day multiplies into large misallocated
+   spend or harm, silently.
+4. **It's now a named frontier inside AI research itself** — "causal AI" is an
+   industry term; production libraries exist (see Core Learning Resources —
+   DoWhy/EconML, CausalML). Causal representation learning / invariant risk
+   minimization is active research into *why* deep models generalize badly
+   out-of-distribution (they latch onto spurious correlations instead of
+   invariant/causal structure) — causal thinking is treated as a fix for a
+   core weakness of deep learning, not a competing discipline.
+
+---
+
 ## Balance (covariate balance between treatment and control)
 
 ### What it means
@@ -90,108 +198,84 @@ something looks off, to figure out whether it's (1) harmless chance noise,
 (2) a real problem with the experiment, or (3) something your own
 preprocessing introduced.
 
-### Resources
-
-- **Brady Neal — *Introduction to Causal Inference*** (free book + video
-  course). Strong ML-oriented foundation; covers balance, confounding,
-  potential outcomes rigorously but accessibly.
-- **Matheus Facure — *Causal Inference for the Brave and True*** (free,
-  Python-code-based). Good fit for this project specifically since it pairs
-  concepts directly with runnable Python — matches a hands-on learning style.
-- **Scott Cunningham — *Causal Inference: The Mixtape*** (free online book).
-  More econometrics-flavored, good for building intuition with real examples.
-
 ---
 
-## Causal Modeling vs. Predictive Modeling
+## Unit of Randomization vs. Unit of Analysis (Duplicates Worked Example)
 
 ### What it means
 
-Predictive modeling answers: *"given X, what is Y?"* — a question about
-**observation**. It estimates `P(Y | X)`.
+The **unit of randomization** is whatever was actually assigned to
+treatment/control (here, probably a customer). The **unit of analysis** is
+whatever you're averaging over when you compute a rate or fit a model (here,
+possibly a row/impression, if each customer can generate multiple rows).
+When these two don't match, two distinct problems appear — neither of which
+is about "the data being dirty":
 
-Causal modeling answers: *"given I **change** X, what happens to Y?"* — a
-question about **intervention**. In Pearl's notation, it estimates
-`P(Y | do(X))`.
+1. **Reweighting bias.** If customers who get more impressions logged (more
+   rows) also differ systematically on anything outcome-relevant, your
+   row-level average silently becomes an impression-weighted average instead
+   of a per-customer average — picking up a spurious correlation that has
+   nothing to do with the treatment itself.
+2. **Non-independence inflates false confidence.** Standard significance
+   tests (z-test, chi-square, OLS standard errors) assume every row is an
+   independent observation. If several rows actually come from one customer,
+   the effective sample size is smaller than the row count suggests — p-values
+   come out smaller (more "significant") than they should. This compounds the
+   already-flagged problem of p-values being too easily triggered at 14M rows
+   in the first place.
 
-These are not the same quantity, and treating them as interchangeable is the
-most common mistake in applied ML.
+This matters specifically because duplicates are a **balance risk**, the same
+way missing values are: if rows aren't evenly spread across treatment and
+control, dropping or keeping them non-neutrally shifts your treatment ratio
+and biases downstream estimates, silently.
 
-### Why they diverge — the classic failure mode
+### Worked example from this project
 
-Ice cream sales correlate with drowning deaths. A predictive model exploits
-that correlation perfectly for prediction — and would be completely wrong if
-acted on causally (banning ice cream does nothing to drownings). Both are
-driven by a hidden common cause: hot weather. The correlation is real; the
-causal story it implies is not. This is **confounding**.
+- `df.duplicated().sum()` → 1,259,545 exact-duplicate rows (~9% of 13,979,592).
+- Treatment mean on full data: **0.850**. After `drop_duplicates()`: **0.839**.
+  Treatment mean *within the duplicate rows only*: **0.961** — duplicates are
+  heavily concentrated in the treated group, far more than the overall 85%
+  treatment ratio. (Full numbers and the notebook check: see
+  `01_data_understanding.ipynb`.)
+- **No customer ID column exists** in this dataset, which is what makes this
+  hard to resolve directly rather than just inconvenient.
 
-### How it shows up in this exact project
+**Checked Criteo's own documentation to settle what a row represents:**
+both the official Criteo AI Lab page and the academic benchmark paper state
+**"one row per user"** — verified directly from both primary sources (v1 was
+25.3M rows, matching the stale-looking comment in the notebook; v2 is 14M
+rows, matching this project's 13,979,592-row unbiased v2.1 subsample).
 
-Phase 3's baseline model (`conversion ~ f0...f11`, ignoring `treatment`) ranks
-customers by their **baseline propensity to buy** — whatever features
-correlate with "already intends to purchase." This is exactly Customer A from
-the README: 90% baseline conversion, looks great to a predictive model, but
-only +2% uplift from the ad. The predictive model isn't wrong at its own task
-— it's answering a different question than "who should we advertise to?"
+**But independent practitioner analysis complicates the official answer.**
+Multiple independent write-ups of this exact dataset report that of the
+13.98M rows, only **~9.17M distinct covariate combinations exist when
+ignoring `f2`** — the other 11 features behave like a "proxy user ID," with
+`f2` the only thing varying within a repeated group (consistent with what
+this project noticed in its own first `head(10)` output). The sharpest
+finding: **~3.4% of these proxy-ID clusters contain rows from *both*
+treatment=1 and treatment=0** — a real single customer cannot be in both
+arms of a between-subjects experiment, so even this richer reconstruction
+isn't a clean customer ID. Some apparent "repeated customer" rows are
+actually coincidental collisions between different customers.
 
-### Four concrete contrasts
+*Confidence note: "one row per user" is directly verified from two primary
+sources. The "9.17M distinct vectors / 3.4% cross-arm" claim is corroborated
+across multiple independent secondary sources, but its original primary
+source wasn't directly confirmed — treat it as well-supported, not certain.*
 
-| | Predictive | Causal / Uplift |
-|---|---|---|
-| Target | `P(Y\|X)` | `E[Y\|do(T=1)] − E[Y\|do(T=0)]` |
-| Ground truth per row? | Yes — you observe `Y` | **No, never** — you can't observe the same customer both with and without treatment (the "fundamental problem of causal inference") |
-| Good feature engineering | Any feature correlated with Y helps | Must distinguish **confounders** (common cause of T and Y — adjust for these) from **mediators** (T → feature → Y, lies on the causal path) and **colliders** (T and Y both cause the feature) — adjusting for mediators/colliders *introduces* bias rather than removing it |
-| What fixes a wrong answer | More data, better features | Only a valid design (randomization) or a credible identification assumption — no amount of extra observational data fixes an unmeasured confounder |
+**Conclusion:** there is no way to cleanly separate "genuine repeat customer"
+from "coincidental feature-bucket collision" from this data alone. This is a
+real limitation of the dataset, not a gap in the analysis.
 
-The "no ground truth per row" row is the one with the most downstream
-consequences: it's exactly why Phase 5 needs Qini/AUUC instead of
-accuracy/AUC — you're evaluating against an aggregate pattern across many
-customers, never a per-row label, because that label fundamentally cannot
-exist for any single customer.
+### Practical approach going forward
 
-### Resources
+Don't resolve this at the understanding stage by picking an option. When
+computing the first real ATE (Session 6 — treatment vs. control conversion
+rate), run it **both with and without duplicates removed** as a robustness
+check:
+- If conclusions don't change, it's low-stakes — note it and move on.
+- If they do change meaningfully, that's a dedicated follow-up (cluster-robust
+  standard errors).
 
-- Same three as above (Brady Neal, Facure, Cunningham) — this distinction is
-  Chapter 1 material in all three.
-
----
-
-## Why Causal Inference Matters — and Whether AI Changes That
-
-### What it means
-
-Prediction answers "what is Y given X, as the world already is." Almost every
-real decision is instead a causal question: "what happens to Y if we *change*
-X?" The gap between those two questions is where costly mistakes live.
-
-### Why AI doesn't make this obsolete — it sharpens it
-
-1. **LLMs/foundation models are trained on correlational, observational data**
-   (next-token prediction = `P(text | context)`, no `do()` anywhere). They can
-   produce fluent causal-*sounding* language because they've seen humans write
-   causal sentences — that's different from performing valid causal inference.
-   Sounding causal ≠ being causally valid, and fluency makes the gap harder to
-   notice.
-2. **Automated decision systems create feedback loops.** A recommender/targeting
-   system that only ever acts on its own past decisions contaminates its own
-   training data — structurally the same problem Criteo's randomized design
-   was built to solve. This is why ad tech specifically was an early adopter of
-   causal inference, not an academic curiosity.
-3. **Scale multiplies the cost of the mistake.** One bad human call wastes one
-   decision; the same statistical error running inside an automated system
-   making millions of decisions/day multiplies into large misallocated
-   spend or harm, silently.
-4. **It's now a named frontier inside AI research itself** — "causal AI" is an
-   industry term; production libraries exist (Microsoft's DoWhy/EconML, Uber's
-   CausalML). Causal representation learning / invariant risk minimization is
-   active research into *why* deep models generalize badly out-of-distribution
-   (they latch onto spurious correlations instead of invariant/causal
-   structure) — causal thinking is treated as a fix for a core weakness of
-   deep learning, not a competing discipline.
-
-### Resources
-
-- Same three (Brady Neal, Facure, Cunningham) for foundations.
-- **DoWhy** and **EconML** (Microsoft) and **CausalML** (Uber) — production
-  causal ML libraries, useful to browse for how causal inference is actually
-  deployed in industry systems.
+Either way, state "no customer ID; duplicate-row structure partially
+unresolvable" explicitly as a limitation in the Phase 8 write-up.
