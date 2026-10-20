@@ -9,6 +9,38 @@ Format per entry: **what it does** → **when to use it here** → **example**.
 
 ---
 
+## `Series` vs. `DataFrame` — 1-D vs. 2-D, not "a column vs. a table"
+
+**What it means:** a `Series` is a genuinely **1-dimensional** labeled array
+(values + an index, no concept of columns). A `DataFrame` is **2-dimensional**
+— rows × columns — where each column is itself a `Series`, and every column
+shares the same index. "n×1 matrix" is a reasonable mental picture but is one
+dimension off: a matrix (even with one column) is still 2-D; a `Series` is
+not.
+
+**Where it becomes concretely visible:**
+```python
+df['f0']        # Series — ndim=1, shape (13979592,)
+df[['f0']]      # DataFrame — ndim=2, shape (13979592, 1)
+df[['f0','f1']] # DataFrame — ndim=2, shape (13979592, 2)
+```
+These look nearly identical when printed, but are different types with
+different `.shape`/`.ndim` — not a cosmetic difference.
+
+**Why this matters here:** it's the actual root cause behind the
+`DataFrame.hist()` vs. `Series.hist()` entry above. `df['f0'].hist()` calls
+`Series.hist()` on a 1-D object with no awareness of any other column;
+`df[['f0','f1',...]].hist()` calls `DataFrame.hist()` on a 2-D object that can
+see every column and build a grid. Same method name, different capability,
+because one object is 1-D and the other is 2-D — not a quirk of `.hist()`
+specifically.
+
+**Useful mental model:** a `DataFrame` is like a dict of `Series` that all
+share one index — `df['f0']` is "give me the Series stored under key `'f0'`,"
+the same way `my_dict['f0']` would be.
+
+---
+
 ## `value_counts(normalize=True)`
 
 **What it does:** by default, `Series.value_counts()` returns raw counts per
@@ -161,3 +193,82 @@ df.drop_duplicates()['treatment'].mean()
 **When to use it:** any time a check depends on "after removing/sorting/
 transforming rows, does X change" — always re-verify you're reading the
 transformed object, not the original.
+
+---
+
+## `DataFrame.hist()` vs `Series.hist()` — three versions compared
+
+**Root cause, stated once:** `Series.hist()` (called on a single column) and
+`DataFrame.hist()` (called on multiple columns at once) are different methods
+with different figure-handling logic. `Series.hist()` falls back to
+`plt.gca()` — "whatever figure is currently active" — if no axis is given.
+`DataFrame.hist()` never does that: it builds its own figure + a full grid of
+axes upfront (`create_subplots(naxes=len(columns), ...)`), *then* loops
+through columns calling matplotlib's `ax.hist(...)` directly on each
+already-assigned axis — bypassing `Series.hist()`'s ambiguous fallback
+entirely. Three real attempts at this, and why each one does or doesn't work:
+
+### Version 1 — the bug
+```python
+for feature in features:
+    plot_hist = df[feature].hist()
+plot_hist
+```
+`feature` is a plain string each iteration → `df[feature]` is a **Series**
+→ `df[feature].hist()` is `Series.hist()`, called 12 separate times. Each
+call has no idea the other 11 exist, and each one falls back to `plt.gca()`
+— the *same* current axes every time, since nothing ever creates a new one.
+Result: 12 histograms stacked on one overlaid plot. `plot_hist` on the last
+line doesn't help — it's just the final iteration's `Axes` object; printing
+it shows its text repr, not a fresh render.
+
+### Version 2 — looks fixed, isn't (a real typo trap)
+```python
+for feature in features:
+    plt.Figure()          # capital F — the class, not the pyplot function
+    df[feature].hist(bins=50)
+    plt.title(feature)
+    plt.show()
+```
+Still calling `Series.hist()` 12 times — that part alone wouldn't be fatal if
+`plt.figure()` (lowercase) were used, since that *would* register a new
+current figure each iteration. But `plt.Figure()` (capital F) instantiates
+the `Figure` **class** directly, which creates an orphan object that pyplot's
+global tracker never finds out about. `plt.gca()` has no idea it exists and
+keeps returning whatever figure was already current — so this version almost
+certainly **still has the overlay bug**, despite looking like a fix.
+**Correct version 2** (lowercase `figure`, actually works):
+```python
+for feature in features:
+    plt.figure()
+    df[feature].hist(bins=50)
+    plt.title(feature)
+    plt.show()
+```
+This is a legitimate fix, but still a workaround for staying in loop form —
+12 separate pop-out figures, each a single panel.
+
+### Version 3 — the idiomatic fix
+```python
+df[features].hist(bins=50, figsize=(14, 10))
+plt.tight_layout()
+```
+`features` is a **list**, so `df[features]` is one **DataFrame** (shape
+`(n_rows, 12)`, `ndim=2`) — built before `.hist()` is even called. This
+invokes `DataFrame.hist()` exactly once, which creates one figure with a
+pre-built 12-panel grid, then loops internally and calls matplotlib's
+`ax.hist(data[col].dropna().values, bins=50)` directly on each pre-assigned
+axis slot — never touching `Series.hist()`'s ambiguous fallback at all. No
+loop needed on your end; the "loop" happens inside pandas, over
+already-decided axes.
+
+**The one-line summary:** the bug was never about whether a column's values
+get histogrammed (they always do, in all three versions) — it's about
+*whether the axis to draw on is decided explicitly, upfront, for every
+column* (version 3, and correctly, version 2) *or guessed independently, one
+call at a time, with no memory of previous calls* (version 1, and — despite
+appearances — version 2 as actually written with capital `Figure()`).
+
+**When to use it:** any time a loop is supposed to produce multiple charts
+and only one (often garbled-looking) chart comes out — check whether a new
+figure was actually created each iteration before assuming the data is wrong.

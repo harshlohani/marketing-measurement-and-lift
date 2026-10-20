@@ -17,20 +17,20 @@ estimate in the chat archive.
 
 ## Phase 1 — Understand the Dataset and Business Problem
 
-- [ ] **Session 1 — Load and verify the data**
+- [x] **Session 1 — Load and verify the data**
   Objective: confirm the dataset loads correctly and matches the documented
   shape (13,979,592 rows; f0–f11 + treatment, conversion, visit, exposure).
   Task: run your existing load cell, `df.head()`, `df.shape`. Fix the stale
   `# Rows: 25,309,483` comment once you see the real number.
   Stop when: you've pasted/recorded the real shape and head output.
 
-- [ ] **Session 2 — Structural investigation**
+- [x] **Session 2 — Structural investigation**
   Concept: why checking dtypes/nulls/duplicates *before* modeling matters
   (silent bugs vs. loud errors).
   Task: `df.info()`, `df.isnull().sum()`, `df.duplicated().sum()`.
   Stop when: you've written a short markdown cell summarizing what you found.
 
-- [ ] **Session 3 — Group distributions**
+- [x] **Session 3 — Group distributions**
   Concept: what a "treatment ratio of .846" structurally means — this is a
   designed imbalance in the experiment, not a bug.
   Task: `value_counts(normalize=True)` on `treatment`, `visit`, `conversion`,

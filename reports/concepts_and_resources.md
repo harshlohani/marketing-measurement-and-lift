@@ -78,7 +78,7 @@ exist for any single customer.
 *(Resources: see Core Learning Resources above — this distinction is Chapter 1
 material in all three foundational texts.)*
 
----
+---cac
 
 ## Why Causal Inference Matters — and Whether AI Changes That
 
@@ -279,3 +279,76 @@ check:
 
 Either way, state "no customer ID; duplicate-row structure partially
 unresolvable" explicitly as a limitation in the Phase 8 write-up.
+
+---
+
+## Feature Distributions — Why Look, Not Just Summarize
+
+### What it means
+
+A mean and standard deviation can hide completely different underlying
+shapes — two features with identical mean/std can look nothing alike
+plotted (a clean bell curve vs. two separate clusters vs. a tight group plus
+a few extreme outliers dragging the mean). You can't tell which from numbers
+alone.
+
+### What a distribution check actually catches
+
+1. **Skew and long tails** — a few extreme values can dominate a mean,
+   making "the average customer" describe almost nobody. Already visible in
+   this project's `describe()` output: `f6` ranges -31.4 to 0.29, `f9` has a
+   max of 75.3 against a 25th percentile of 13.19.
+2. **Low cardinality / discreteness** — a "continuous" feature with only a
+   handful of distinct values is likely a bucketed/hashed categorical, not a
+   true measurement. Directly extends the duplicates/proxy-ID investigation
+   above.
+3. **Multi-modality** — separate humps usually mean a mixture of genuinely
+   different subpopulations lumped into one column.
+4. **Sentinel values disguised as real numbers** — the sharpest trap. `isna()`
+   only catches actual nulls; a dataset can encode "missing" as a real,
+   valid-looking number instead (`-1`, `0`, `999`). A histogram shows this as
+   a suspicious spike disconnected from the rest of the distribution —
+   something a null-check will never surface.
+
+### Why it matters more here than in a generic ML project
+
+- **Protects upcoming balance checks (Session 5).** A mean-based SMD
+  comparison on a skewed feature can be misleading either way — outliers in
+  one group can fake an imbalance, or mask a real one. Knowing the shape
+  first tells you whether to trust a raw mean comparison or need something
+  more robust (median, log-transform).
+- **Feeds Phase 4's heterogeneity analysis.** Naive quartile binning on a
+  skewed feature can bury genuine treatment-effect heterogeneity in one
+  overstuffed bucket.
+- **More evidence for the proxy-ID question.** A feature with very few
+  distinct values strengthens the "these are hashed/bucketed, not true
+  continuous measurements" hypothesis already flagged as an open limitation.
+
+### Worked example: `f0`'s real histogram confirms the bucketing hypothesis
+
+Plotting `f0` turned the "proxy ID" hypothesis from inference into direct
+evidence. `df['f0'].describe()` showed the **25th percentile exactly equal to
+the minimum** (12.616) — a pattern a genuinely continuous measurement almost
+never produces, since it means at least a quarter of all 13,979,592 rows hold
+the exact same value. The histogram confirmed it at scale: the first bar
+reaches ~3.9M rows, **~28% of the entire dataset**, matching the percentile
+check almost exactly (two independent methods agreeing — the same
+cross-validation habit as checking `value_counts(normalize=True)` against
+`.mean()` earlier in this project).
+
+The rest of the shape isn't a bell curve, simple skew, or clean bimodal
+either: a flat, step-like low plateau from ~13.5–21, then a secondary rise
+near the top of the range (22–27). Mean (19.62) and std (5.38) describe
+essentially none of this — the single most common value isn't anywhere near
+the mean, which is the real-data version of the "same mean/std, different
+shape" lesson, no longer hypothetical.
+
+This also closes the loop on the very first `head(10)` output from Session 1,
+where `f0 = 12.616365` for all 10 rows shown — not a coincidence of early
+rows, but the dominant value across over a quarter of the full dataset.
+
+**Next diagnostic step, to confirm directly rather than infer from shape:**
+```python
+df['f0'].nunique()
+df['f0'].value_counts().head(20)
+```
