@@ -352,3 +352,142 @@ rows, but the dominant value across over a quarter of the full dataset.
 df['f0'].nunique()
 df['f0'].value_counts().head(20)
 ```
+
+---
+
+## ECDF (Empirical Cumulative Distribution Function)
+
+### What it means
+
+For a value `x`, the ECDF answers: *"what fraction of rows have a value ≤ x?"*
+Plotted, x-axis = feature value, y-axis = 0 to 1 cumulative share. It is built
+directly from the sorted data: no bins, no bandwidth, no smoothing choices.
+Every row contributes exactly one step.
+
+### Why it beats histograms/KDE for comparing two groups
+
+- **No binning or bandwidth artifacts.** A histogram's shape changes with bin
+  width; a KDE's changes with bandwidth. The ECDF has no tuning knob, so a
+  difference you see between groups is a difference in the data.
+- **Spikes become vertical jumps.** A point mass (like `f0`'s ~28% at 12.616)
+  shows as a vertical jump of height ~0.28 at that exact x. A KDE would blur
+  it into a bump; a histogram hides it inside a bar. The jump height *is* the
+  share of rows with that value, readable straight off the y-axis.
+- **Sample-size independent.** y is a proportion, so a group with 85% of rows
+  and a group with 15% are directly comparable. Raw-count histograms are not
+  (the treated bars would dwarf the control bars).
+- **Quantiles are read off directly.** Median = where the curve crosses 0.5.
+  Comparing two groups = comparing their curves at every quantile at once,
+  not just the mean.
+- **Tails are visible.** Skewed features (`f6`, `f9`) show their long tail as
+  a slow approach to 1.0 instead of invisible sliver bars.
+
+### Why it matters specifically in this project
+
+1. **It is a balance check (Session 5 preview).** Randomization implies the
+   feature distribution is the same in treatment and control. Overlaid ECDFs
+   test that on the *whole distribution*, while an SMD only compares means
+   (scaled by std) and can miss a difference in shape or tails. Curves lying
+   on top of each other = balanced; a consistent gap = investigate.
+2. **The treatment/control split is 85/15.** That imbalance in group size makes
+   count-based plots misleading; ECDFs are immune because they are proportions.
+3. **Bucketed features.** Since `f0` and probably others are discrete/hashed,
+   KDE comparisons are unreliable; ECDF handles discrete data exactly.
+4. **No p-value trap.** At 14M rows a KS test (the max vertical gap between two
+   ECDFs) will flag trivial differences as "significant". The *plot* shows
+   whether a gap is visually large enough to matter, and the KS statistic
+   itself (the gap size, not its p-value) is a usable effect size.
+
+### How to read the plot
+
+- Curves overlap → same distribution.
+- One curve consistently above the other → that group has systematically
+  smaller values (more of its mass sits to the left).
+- Curves cross → groups differ in spread/shape, not just location.
+- Max vertical gap = KS statistic; rule of thumb, gaps under ~0.01 are
+  practically negligible.
+
+### Practical notes
+
+- Use a sample (`df.sample(500_000, random_state=0)`) for plotting speed; the
+  ECDF of a 500k random sample is extremely close to the full one.
+- Put `hue='treatment'` so both groups share one axis.
+- Plot one feature per figure, or a grid of subplots with an explicit `ax=`
+  (same `plt.figure()` vs `plt.Figure()` and axis pitfalls as in
+  `useful_functions_reference.md`).
+- Seaborn: `sns.ecdfplot`. Matplotlib-only: sort values, y = `np.arange(1, n+1)/n`.
+
+*(Resources: Facure's *Causal Inference for the Brave and True* and Brady
+Neal's book cover balance checks; the ECDF/KS idea itself is standard
+nonparametric statistics.)*
+
+---
+
+## Histogram Bin Width and KDE Bandwidth
+
+### What it means
+
+Both control how much the data is smoothed before you look at it. Histogram
+bin width and KDE bandwidth `h` play the same role: wide = coarse and stable,
+narrow = detailed and noisy.
+
+### The tradeoff (bias vs. variance)
+
+- **Too wide:** stable but hides real structure (a KDE with large `h` melts
+  `f0`'s 28% spike into a soft bump and puts density at values below the
+  smallest real value).
+- **Too narrow:** matches *this sample* closely but not the process behind it.
+  Another random sample of the same feature gives a different jagged picture
+  (overfitting). Smaller is not "better fit".
+- **Limit, width -> 0:** a histogram cannot exist at exactly 0, but in the
+  limit it becomes isolated needles, one per distinct observed value. Without
+  ties all needles have equal height (1 row each), so the heights that carry
+  the shape collapse. With ties (like `f0`) the needle heights equal
+  `value_counts()`. That is just the raw data restated, not a shape.
+- **Limit, 1 bin:** a single block holding every row. No shape either.
+- A histogram is informative only when bars hold *many rows each*. A density
+  estimate converges to the truth only if the width shrinks more slowly than
+  the sample grows.
+- The ECDF is the infinite-bin histogram accumulated left to right: each
+  needle becomes a tiny step, so no information is lost and no width needs
+  choosing. This is why it is the safe tool when you cannot trust a bin or
+  bandwidth choice.
+
+### Finding the sweet spot
+
+Standard formulas pick a bin count/width from sample size `n` and data spread:
+
+- **Sturges' rule:** best for roughly normal data.
+  `bins = 1 + log2(n)`
+- **Freedman-Diaconis rule:** better when there are outliers, because it uses
+  the interquartile range (IQR) instead of the standard deviation.
+  `bin width = 2 * IQR / n^(1/3)`
+
+In NumPy/matplotlib: `bins='sturges'` or `bins='fd'` (or `'auto'`, which takes
+the better of the two); `np.histogram_bin_edges(x, bins='fd')` returns the
+edges so you can inspect them. KDE has the analogous rules of thumb: Scott's
+and Silverman's bandwidth (the defaults in `sns.kdeplot` and pandas'
+`plot(kind='kde')`).
+
+### Caveats specific to this project
+
+- **Sturges is weak at this scale.** With n = 13,979,592 it gives
+  `1 + log2(n) ~ 24.7`, so about 25 bins. It only grows logarithmically and
+  was designed for small, normal-ish samples.
+- **Freedman-Diaconis scales better.** `n^(1/3) ~ 241`, so the width is about
+  `IQR / 120`, i.e. many fine bins. Compute each feature's IQR from
+  `describe()` to see what it suggests.
+- **Neither rule knows about point masses.** Both assume a smooth
+  distribution. `f0`'s ~28% spike at 12.616 (25th percentile = minimum) is
+  real repeated values, so it stays one tall bar at any bin count, and the
+  rules cannot flag it. Treat the rule output as a starting point and confirm
+  with `nunique()` / `value_counts()` for suspect features.
+- **Smoothing hides what the check is for.** In distribution checks the goal
+  is to *find* spikes, sentinels and bucketing, so lean toward less smoothing
+  for large n, and cross-check with ECDFs rather than trusting any single
+  setting.
+
+### Interactive explainers
+
+- KDE and ECDF Lab: https://claude.ai/artifact/49mkSnxMFp8XBRLt1CAEe3
+- Bin Width Lab: https://claude.ai/artifact/TC9vu3qHzUkV9ERL4RVdwb
